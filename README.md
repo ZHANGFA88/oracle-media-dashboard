@@ -84,19 +84,48 @@ EMBY_KEY = "你的 API Key"  # Emby API Key
 EMBY_HOST = "127.0.0.1:8096" # Emby 地址
 ```
 
-### 3. 安装 systemd 服务
+### 3. 修改海报跳转链接（重要！）
+编辑 `public/media.html`，大约在 320 行，修改跳转链接为你的 Emby 地址：
+```javascript
+return `<a href="https://你的emby域名/web/index.html#!/item?id=${m['id']}&serverId=你的serverId" ...`
+```
+- `serverId` 在你打开 Emby 任意影片的时候可以从 URL 中获取
+- 本项目已经预置了 `serverId=a4893e3421b84f6381cfdcc7d6f28ab6`，如果你的和这个不一样，请修改
+
+### 4. 修改 STRM 统计路径
+如果你的 STRM 存放路径不是 `/home/syncthing`，需要编辑 `collect_media.sh` 修改：
+```bash
+STRM_DAILY=$(strm_count /home/syncthing/daily_strm_new)  # 修改日更库路径
+STRM_TOTAL=$(timeout 60 find /home/syncthing -name "*.strm" ...)  # 修改全库路径
+```
+
+### 5. 安装 systemd 服务
 ```bash
 cp media-dashboard.service /etc/systemd/system/
 # 如果你安装路径不是 /root/media-dashboard，需要编辑 service 文件修改路径
+# 编辑 ExecStart 和 WorkingDirectory
 systemctl daemon-reload
 systemctl enable media-dashboard
 systemctl start media-dashboard
 ```
 
-### 4. 访问
+### 6. 访问
 打开浏览器访问：
 ```
 http://你的服务器IP:8771
+```
+
+### 7. 检查运行状态
+```bash
+# 查看状态
+systemctl status media-dashboard
+
+# 查看日志
+journalctl -u media-dashboard -f
+
+# 手动测试API
+curl -s http://127.0.0.1:8771/api/media/movies
+# 应该返回一个 JSON 数组，包含 22 个电影电视剧
 ```
 
 ## 📁 项目结构
@@ -179,6 +208,98 @@ MIT License
 - 🔑 API Key 只在服务端使用，不会泄露给前端
 - 📝 建议放在内网访问，或者添加反向代理认证
 - 🐳 如果你用 Docker 运行 Emby，只需要修改 `collect_media.sh` 中的路径即可
+
+## 📸 效果截图
+
+### 🖥️ 完整大屏截图
+
+![完整大屏预览](screenshot-full.png)
+
+### 📊 右栏面板效果
+
+```
+┌─────────────────────────────────┐
+│  🩺 STRM 健康度                │
+├─────────────────────────────────┤
+│  全库总 STRM       24,629       │
+│  杜比视界 STRM          0       │
+│  日更库 STRM        1,980       │
+│  近 3 天新增             21     │
+│  近 7 天新增             53     │
+└─────────────────────────────────┘
+┌─────────────────────────────────┐
+│  ⏱️ 定时任务                   │
+├─────────────────────────────────┤
+│  certbot.service       今天 14:44│
+│  daily-strm...        明天 06:05│
+│  dolby-strm...        下周 周五  │
+│  ...                              │
+└─────────────────────────────────┘
+┌─────────────────────────────────┐
+│  ☁️ 云盘状态                   │
+├─────────────────────────────────┤
+│  挂载             ✅ 正常       │
+│  rclone 服务       active       │
+│  缓存用量          12G          │
+│  错误计数          95           │
+└─────────────────────────────────┘
+```
+
+### 🎬 每日更新海报墙
+
+- 网格布局，自动适应宽度
+- 每个海报保持 2:3 比例
+- 鼠标悬停放大效果
+- 点击直接跳转 Emby
+- **限制 22 个**，不会拥挤重叠
+
+## ❓ 常见问题与故障解决
+
+### Q1: 定时任务面板是空的，不显示？
+**A:** 检查 `collect_media.sh` 是否有执行权限，并且确认你的系统使用 `systemd`（大部分 Linux 发行版都是 systemd）。
+
+### Q2: 每日更新海报墙是空的？
+**可能原因：**
+1. API Key 不正确 → 检查 `serve_media.py` 中的 `EMBY_KEY` 是否完整正确
+2. Emby 地址不对 → 检查 `EMBY_HOST`
+3. 过滤条件太严 → 本项目已经放宽过滤条件，只要有 Primary 图片标签就显示
+
+**解决：**
+```bash
+# 直接测试 API
+curl -s http://127.0.0.1:8771/api/media/movies
+# 如果返回 [] 空数组，说明后端收集有问题
+# 如果返回 JSON 数组但是前端不显示，检查前端缓存，强制刷新
+```
+
+### Q3: 点击海报跳转 404？
+**A:** 确认你的 Emby 公网地址，修改 `public/media.html` 中的跳转链接：
+```javascript
+// 在大约 320 行，修改 href 为你的地址
+return `<a href="https://你的域名/web/index.html#!/item?id=${m['id']}&serverId=你的serverId" ...`
+```
+
+### Q4: STRM 统计很慢，超时？
+**A:** 脚本已经加了超时保护：
+- 全库统计超时 60 秒
+- 如果你的STRM文件特别多，可以修改超时时间在 `collect_media.sh`
+- 统计是每分钟更新一次，不影响前端访问
+
+### Q5: 服务启动失败？
+**检查：**
+```bash
+systemctl status media-dashboard
+journalctl -u media-dashboard -f
+```
+常见问题：
+- Python 版本太低 → 需要 Python 3.7+
+- 路径不对 → 检查 `media-dashboard.service` 中的路径是否和你的安装路径一致
+
+### Q6: 怎么修改海报数量限制？
+**A:** 在 `serve_media.py` 中找到这行修改：
+```python
+return self._json(200, out[:22])  # 修改 22 为你想要的数量
+```
 
 ## 📝 更新日志
 
