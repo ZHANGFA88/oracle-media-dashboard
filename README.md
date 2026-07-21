@@ -167,4 +167,6 @@ MIT License
 
 ---
 
-*项目由 OpenClaw AI 辅助开发 🤖*
+👨‍💻 **作者：壮壮 (ZHANGFA88)**
+
+*项目由 OpenClaw AI 辅助开发完成 🤖*
