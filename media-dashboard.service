@@ -1,0 +1,15 @@
+[Unit]
+Description=Emby Media Dashboard
+After=network.target emby-server.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/media-dashboard
+ExecStart=/usr/bin/python3 /root/media-dashboard/serve_media.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

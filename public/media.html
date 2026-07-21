@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>甲骨文媒体库监控</title>
+<!-- 引入cobe地球(复刻金融大屏，createGlobe已挂载到window) -->
+<script src="/public/cobe.js"></script>
+<style>
+:root{
+  --bg:#05070d; --bg2:#0a0e18;
+  --panel:rgba(16,22,38,0.72);
+  --border:rgba(90,130,200,0.18);
+  --gold:#e8b866; --gold-dim:#a8853f;
+  --cyan:#4fd6ff;
+  --text:#d6e2f5; --text-dim:#6b7a95;
+  --ok:#22d380; --warn:#e8b866; --err:#ff4d5e;
+}
+html[data-theme="light"]{
+  --bg:#eef2f8; --bg2:#f7f9fc;
+  --panel:rgba(255,255,255,0.82);
+  --border:rgba(90,130,200,0.28);
+  --gold:#b8862f; --cyan:#1a94c4;
+  --text:#1a2440; --text-dim:#6b7a95;
+  --ok:#12a566; --warn:#b8862f; --err:#e03444;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+html,body{height:100%; background:var(--bg); color:var(--text);
+  font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; overflow:hidden;}
+body::before{content:""; position:fixed; inset:0; z-index:-2;
+  background:
+    radial-gradient(circle at 20% 15%, rgba(79,214,255,0.08), transparent 40%),
+    radial-gradient(circle at 85% 80%, rgba(232,184,102,0.07), transparent 45%),
+    linear-gradient(180deg, var(--bg) 0%, var(--bg2) 100%);}
+body::after{content:""; position:fixed; inset:0; z-index:-1;
+  background-image:
+    linear-gradient(rgba(90,130,200,0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(90,130,200,0.05) 1px, transparent 1px);
+  background-size:44px 44px;
+  mask-image:radial-gradient(circle at 50% 40%, #000 55%, transparent 100%);}
+
+/* ========== 第一步：基础布局结构 ========== */
+.layout{display:grid; grid-template-rows:60px 1fr; height:100vh; padding:12px 18px; gap:12px;}
+.main{display:grid; grid-template-columns:280px 1fr 280px; gap:12px; min-height:0;}
+
+/* 所有列都是flex垂直排列 */
+.col{display:flex; flex-direction:column; gap:12px; min-height:0;}
+
+/* ========== 左栏flex分配 ========== */
+/* 1. 地球面板：不压缩，固定高度 */
+#colLeft .panel:nth-child(1) {
+  flex-shrink: 0;
+  width: 100%;
+  height: auto;
+}
+/* 2. 谁在看Emby：不压缩，最大高度 */
+#colLeft .panel:nth-child(2) {
+  flex-shrink: 0;
+  width: 100%;
+  max-height: 240px;
+  height: auto;
+}
+/* 3. 媒体库总览：占剩余空间，可滚动 */
+#colLeft .panel:nth-child(3) {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* ========== 中栏flex分配 ========== */
+/* 1. Emby最近入库：占2/3空间 */
+#colCenter .panel:first-child {
+  flex: 2;
+  min-height: 400px;
+  display: flex;
+  flex-direction: column;
+}
+/* 2. 日志中心：占1/3空间 */
+#colCenter .panel:last-child {
+  flex: 1;
+  min-height: 200px;
+}
+
+/* ========== 右栏flex分配 ========== */
+/* 每个面板平分右栏高度，都能显示完整 */
+#colRight .panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* ========== 基础面板样式 ========== */
+.panel{background:var(--panel); border:1px solid var(--border); border-radius:12px;
+  backdrop-filter:blur(8px); padding:14px;}
+.card-title{display:flex; align-items:center; gap:7px; font-size:13px; font-weight:600;
+  color:var(--gold); margin-bottom:10px; letter-spacing:.5px;}
+.card-title .ico{font-size:15px;}
+.row{display:flex; justify-content:space-between; align-items:center;
+  padding:5px 0; font-size:12.5px; border-bottom:1px solid rgba(90,130,200,0.06);}
+.row:last-child{border-bottom:none;}
+.row .k{color:var(--text-dim);}
+.row .v{color:var(--text); font-weight:600; font-variant-numeric:tabular-nums;}
+.dot{display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px;}
+.dot.ok{background:var(--ok); box-shadow:0 0 6px var(--ok);}
+.dot.warn{background:var(--warn); box-shadow:0 0 6px var(--warn);}
+.dot.err{background:var(--err); box-shadow:0 0 6px var(--err);}
+.v.ok{color:var(--ok);} .v.warn{color:var(--warn);} .v.err{color:var(--err);}
+
+/* 日志中心 */
+.logwrap{display:flex; flex-direction:column; height:100%; min-height:0;}
+.logtabs{display:flex; gap:6px; margin-bottom:10px; flex-wrap:wrap;}
+.logtab{padding:5px 12px; font-size:12px; border-radius:7px; cursor:pointer;
+  background:rgba(90,130,200,0.08); border:1px solid var(--border); color:var(--text-dim);}
+.logtab.active{background:rgba(79,214,255,0.14); border-color:var(--cyan); color:var(--cyan);}
+.logbody{flex:1; min-height:0; overflow:auto; font-family:"SF Mono",Menlo,Consolas,monospace;
+  font-size:11.5px; line-height:1.6; background:rgba(0,0,0,0.22); border-radius:8px; padding:8px 10px;}
+.logline{white-space:pre-wrap; word-break:break-all; padding:1px 0; border-left:2px solid transparent; padding-left:7px;}
+.logline.info{color:var(--text-dim);}
+.logline.warn{color:var(--warn); border-left-color:var(--warn); background:rgba(232,184,102,0.05);}
+.logline.error{color:var(--err); border-left-color:var(--err); background:rgba(255,77,94,0.06);}
+.logbody::-webkit-scrollbar{width:7px;} .logbody::-webkit-scrollbar-thumb{background:rgba(90,130,200,0.25); border-radius:4px;}
+</style>
+</head>
+<body>
+<div class="layout">
+  <!-- 顶部状态条 -->
+  <header class="panel" style="display:flex;align-items:center;gap:18px;padding:0 20px;">
+    <div style="font-size:15px;font-weight:700;color:var(--gold);letter-spacing:1px;">🎬 甲骨文媒体库监控</div>
+    <div style="display:flex;align-items:center;gap:6px;font-size:13px;">
+      <span class="dot ok" id="embyDot"></span><span id="embyState">Emby 检测中…</span>
+    </div>
+    <div style="font-size:12.5px;color:var(--text-dim);">运行 <span id="uptime" style="color:var(--text);font-weight:600;">--</span> 天</div>
+    <div style="flex:1;"></div>
+    <div id="clock" style="font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;">--:--:--</div>
+    <button id="themeBtn" style="background:rgba(90,130,200,0.1);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:5px 10px;cursor:pointer;font-size:14px;">☀️</button>
+  </header>
+
+  <div class="main">
+    <!-- 左栏 -->
+    <aside class="col" id="colLeft">
+      <!-- 第二步：🌍 3D地球 - 固定260×260px，绝对不压缩 -->
+      <div class="panel">
+        <div class="card-title"><span class="ico">🌍</span>3D 地球</div>
+        <canvas id="globeCanvas" width="260" height="260" style="
+          display: block !important;
+          width: 260px !important;
+          height: 260px !important;
+          margin: 8px auto;
+          background: rgba(0,0,0,0.1);
+          border-radius: 8px;
+        "></canvas>
+      </div>
+      <!-- 第三步：👥 谁在看 Emby - 地球正下方，最大高度限制，可滚动 -->
+      <div class="panel">
+        <div class="card-title"><span class="ico">👥</span>谁在看 Emby</div>
+        <div id="earthMeta" style="text-align:center;font-size:12px;color:var(--text-dim);margin-bottom:8px;">-- 人在线</div>
+        <div id="earthList" style="max-height:160px;overflow:auto;"></div>
+      </div>
+      <!-- 第四步：📊 媒体库总览 - 占剩余空间 -->
+      <div class="panel">
+        <div class="card-title"><span class="ico">🎬</span>媒体库总览</div>
+        <div class="row"><span class="k">Emby 版本</span><span class="v" id="m_ver">--</span></div>
+        <div class="row"><span class="k">容器状态</span><span class="v" id="m_up">--</span></div>
+        <div class="row"><span class="k">当前在播</span><span class="v" id="m_play">--</span></div>
+        <div class="row"><span class="k">CPU 占用</span><span class="v" id="m_cpu">--</span></div>
+      </div>
+    </aside>
+
+    <!-- 中栏：🎬 Emby最近入库（上） + 📝 日志中心（下） -->
+    <section class="col" id="colCenter">
+      <div class="panel" style="flex:1;min-height:0;display:flex;flex-direction:column;">
+        <div class="card-title"><span class="ico">🎬</span>每日更新
+          <span style="flex:1"></span>
+          <span style="font-size:11px;color:var(--text-dim);" id="posterMeta">-- 部</span>
+        </div>
+        <div class="poster-grid" id="posterGrid" style="flex:1;display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px;overflow:auto;padding:4px;"></div>
+      </div>
+      <!-- 下半：日志中心 -->
+      <div class="panel" style="flex:1;min-height:0;">
+        <div class="card-title"><span class="ico">📋</span>日志中心
+          <span style="flex:1"></span>
+          <span style="font-size:11px;color:var(--text-dim);" id="logMeta">--</span>
+        </div>
+        <div class="logwrap">
+          <div class="logtabs">
+            <div class="logtab active" data-src="emby">Emby</div>
+            <div class="logtab" data-src="rclone">rclone 云盘</div>
+            <div class="logtab" data-src="strm">STRM 日更</div>
+          </div>
+          <div class="logbody" id="logBody"><div class="logline info">加载日志中…</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 右栏：从上到下依次排列，每个面板平分高度 -->
+    <aside class="col" id="colRight">
+      <div class="panel">
+        <div class="card-title"><span class="ico">🩺</span>STRM 健康度</div>
+        <div class="row"><span class="k">全库总 STRM</span><span class="v" id="s_total">--</span></div>
+        <div class="row"><span class="k">杜比视界 STRM</span><span class="v" id="s_dolby">--</span></div>
+        <div class="row"><span class="k">日更库 STRM</span><span class="v" id="s_daily">--</span></div>
+        <div class="row"><span class="k">近 3 天新增</span><span class="v" id="s_new3">--</span></div>
+        <div class="row"><span class="k">近 7 天新增</span><span class="v" id="s_new7">--</span></div>
+      </div>
+      <div class="panel">
+        <div class="card-title"><span class="ico">⏱️</span>定时任务</div>
+        <div id="timers"><div class="row"><span class="k">加载中…</span></div></div>
+      </div>
+      <div class="panel">
+        <div class="card-title"><span class="ico">☁️</span>云盘状态</div>
+        <div class="row"><span class="k">挂载</span><span class="v" id="r_mount">--</span></div>
+        <div class="row"><span class="k">rclone 服务</span><span class="v" id="r_active">--</span></div>
+        <div class="row"><span class="k">缓存用量</span><span class="v" id="r_cache">--</span></div>
+        <div class="row"><span class="k">错误计数</span><span class="v" id="r_err">--</span></div>
+      </div>
+      <div class="panel">
+        <div class="card-title"><span class="ico">💻</span>系统信息</div>
+        <div class="row"><span class="k">内存 MB</span><span class="v" id="y_mem">--</span></div>
+        <div class="row"><span class="k">磁盘</span><span class="v" id="y_disk">--</span></div>
+        <div class="row"><span class="k">负载</span><span class="v" id="y_load">--</span></div>
+      </div>
+      <div class="panel">
+        <div class="card-title"><span class="ico">🔐</span>安全证书</div>
+        <div id="certs"><div class="row"><span class="k">加载中…</span></div></div>
+      </div>
+    </aside>
+  </div>
+</div>
+<script>
+// 工具函数 $ 按id获取元素
+function $(id){return document.getElementById(id);}
+
+// 时钟
+function tickClock(){$('clock').textContent=new Date().toLocaleTimeString('zh-CN',{hour12:false});}
+setInterval(tickClock,1000); tickClock();
+// 主题切换
+const tb=document.getElementById('themeBtn');
+function applyTheme(t){document.documentElement.setAttribute('data-theme',t);tb.textContent=t==='light'?'🌙':'☀️';}
+applyTheme(localStorage.getItem('md_theme')||'dark');
+tb.onclick=()=>{const c=document.documentElement.getAttribute('data-theme')==='light'?'dark':'light';localStorage.setItem('md_theme',c);applyTheme(c);};
+// 地球初始化 - 现在createGlobe已经挂载到window，保证能拿到
+let globeInited = false;
+let earthInstance = null;
+
+function initGlobe(){
+  if(globeInited) return;
+  const canvas = document.getElementById('globeCanvas');
+  if(!canvas || typeof window.createGlobe !== 'function') {
+    console.log('等待createGlobe...', typeof window.createGlobe);
+    setTimeout(initGlobe, 100);
+    return;
+  }
+  globeInited = true;
+  let phi = 0;
+  
+  function animate(){
+    phi += 0.003;
+    earthInstance && earthInstance.update({ phi });
+    requestAnimationFrame(animate);
+  }
+  
+  try {
+    earthInstance = window.createGlobe(canvas, {
+      devicePixelRatio: 2, width: 260, height: 260, phi: 0, theta: 0.3,
+      dark: 1, diffuse: 1.5, mapSamples: 16000, mapBrightness: 6,
+      baseColor: [0.1, 0.25, 0.45], markerColor: [0.4, 0.75, 1.0], glowColor: [0.2, 0.6, 1.0],
+      markers: [{ location: [31.23, 121.47], size: 0.04 }],
+      markerElevation: 0.02
+    });
+    
+    // 添加点击事件：点击光点跳转播放
+    canvas.addEventListener('click', function(e) {
+      if (!currentMarkers || currentMarkers.length === 0) return;
+      
+      // 获取点击坐标相对canvas
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      
+      // 将canvas坐标转换为经纬度
+      const { width, height } = canvas;
+      const lon = (x / width - 0.5) * 360;
+      const lat = (0.5 - y / height) * 180;
+      
+      // 找到最近的光点
+      let minDist = Infinity;
+      let closest = null;
+      currentMarkers.forEach(m => {
+        const dlat = lat - m.location[0];
+        const dlon = lon - m.location[1];
+        const dist = Math.sqrt(dlat*dlat + dlon*dlon);
+        if (dist < minDist && dist < 8) { // 8度阈值
+          minDist = dist;
+          closest = m;
+        }
+      });
+      
+      if (closest && closest.itemId) {
+        console.log('👉 跳转到播放：', closest.itemName);
+        window.open(`http://${window.location.hostname}:8096/web/item/item.html?id=${closest.itemId}`, '_blank');
+      }
+    });
+    
+    animate();
+    console.log('✅ 地球初始化完成！260×260px，点击跳转已启用');
+  } catch(e) {
+    console.error('❌ 地球初始化失败', e);
+  }
+}
+// 页面加载完成后初始化
+if(document.readyState === 'complete') setTimeout(initGlobe, 100);
+else window.addEventListener('load', () => setTimeout(initGlobe, 100));
+
+// —— 海报墙渲染 ——
+let movieList = [];
+async function loadPosters(){
+  try{
+    const r=await fetch('/api/media/movies');
+    movieList=await r.json();
+    $('posterMeta').textContent=movieList.length+' 部';
+    const html=movieList.map(m=>{
+      const t=m['name']+(m['year']?` (${m['year']})`:'');
+      return `<a href="https://tv.embyapp.top/web/index.html#!/item?id=${m['id']}&serverId=a4893e3421b84f6381cfdcc7d6f28ab6" target="_blank" title="${t}" style="display:block;border-radius:8px;overflow:hidden;aspect-ratio:2/3;background:rgba(90,130,200,0.06);border:1px solid rgba(90,130,200,0.12);cursor:pointer;transition:transform .15s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)">
+        <img src="/api/media/poster?id=${m['id']}" loading="lazy" style="width:100%;height:100%;object-fit:cover;" alt="${t}">
+      </a>`;
+    }).join('');
+    $('posterGrid').innerHTML=html;
+  }catch(e){console.error(e);}
+}
+
+// —— 在线用户渲染（谁在看Emby） ——
+// 保存所有光点数据，用于点击检测
+let currentMarkers = [];
+async function loadAccess(){
+  try{
+    const r=await fetch('/api/media/access');
+    const d=await r.json();
+    $('earthMeta').textContent=d.length+' 人在线';
+    // 更新地球光点 - 使用真实经纬度
+    if(earthInstance && d.length){
+      currentMarkers = d.map(x => ({
+        location: [x.lat, x.lon],
+        size: 0.05,
+        itemId: x.itemId,
+        itemName: x.itemName
+      }));
+      earthInstance.update({ markers: currentMarkers });
+    }
+    // 列表：显示区域 + IP + 用户 + 设备 + 正在播放
+    $('earthList').innerHTML=d.map(x=>`
+      <div style="display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px solid rgba(90,130,200,0.08);cursor:pointer;" 
+          onclick="if(x.itemId) window.open('http://${window.location.hostname}:8096/web/item/item.html?id=${x.itemId}', '_blank')">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="font-size:13px;font-weight:600;">${x.loc}</span>
+          <span style="color:var(--text);font-size:12px;font-weight:600;">${x.user||'未知'}</span>
+          <span style="color:var(--text-dim);font-size:10px;">${x.device}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="color:var(--text-dim);font-size:10px;">IP: ${x.ip}</span>
+          ${x.itemName ? `<span style="color:var(--gold);font-size:11px;font-weight:600;">▶️ ${x.itemName}</span>` : ''}
+        </div>
+      </div>
+    `).join('');
+  }catch(e){console.error(e);}
+}
+
+// —— stats 轮询 ——
+async function loadStats(){
+  try{
+    const r=await fetch('/api/media/stats'); const d=await r.json();
+    // 顶部
+    const on=d.emby.status==='running';
+    $('embyDot').className='dot '+(on?'ok':'err');
+    $('embyState').textContent=on?'Emby 在线':'Emby 离线';
+    $('uptime').textContent=d.sys.uptime_days;
+    // 媒体库
+    $('m_ver').textContent=d.emby.version||'--';
+    $('m_up').textContent=d.emby.up||'--';
+    $('m_play').textContent=(d.emby.playing>0?'▶️ ':'')+d.emby.playing+' 个';
+    $('m_cpu').textContent=d.emby.cpu||'--';
+    // STRM
+    $('s_total').textContent=(+d.strm.total).toLocaleString();
+    $('s_dolby').textContent=(+d.strm.dolby).toLocaleString();
+    $('s_daily').textContent=(+d.strm.daily_new).toLocaleString();
+    $('s_new3').textContent=d.strm.new_3d;
+    $('s_new7').textContent=d.strm.new_7d;
+    // 云盘
+    const mok=d.rclone.mount==='ok';
+    $('r_mount').innerHTML='<span class="dot '+(mok?'ok':'err')+'"></span>'+(mok?'正常':'掉线!');
+    $('r_mount').className='v '+(mok?'ok':'err');
+    $('r_active').textContent=d.rclone.active;
+    $('r_cache').textContent=d.rclone.cache;
+    $('r_err').textContent=d.rclone.errors;
+    // 系统
+    $('y_mem').textContent=d.sys.mem_mb;
+    const dp=+d.sys.disk_pct;
+    $('y_disk').textContent=d.sys.disk; $('y_disk').className='v '+(dp>85?'err':dp>75?'warn':'');
+    $('y_load').textContent=d.sys.load;
+    // 证书
+    $('certs').innerHTML=(d.cert||'').trim().split(/\s+/).filter(Boolean).map(c=>{
+      const[n,dd]=c.split(':'); const days=parseInt(dd);
+      const cls=days<7?'err':days<21?'warn':'ok';
+      return '<div class="row"><span class="k">'+n+'</span><span class="v '+cls+'">'+dd+'</span></div>';
+    }).join('')||'<div class="row"><span class="k">无数据</span></div>';
+  }catch(e){console.error(e);}
+}
+
+// —— 日志中心 ——
+let curSrc='emby';
+async function loadLogs(){
+  try{
+    const r=await fetch('/api/media/logs?src='+curSrc+'&n=80'); const d=await r.json();
+    const body=$('logBody');
+    const near=body.scrollTop+body.clientHeight>=body.scrollHeight-30;
+    body.innerHTML=(d.lines||[]).map(x=>'<div class="logline '+x.t+'">'+x.l.replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))+'</div>').join('')||'<div class="logline info">(无日志)</div>';
+    const errs=(d.lines||[]).filter(x=>x.t==='error').length, warns=(d.lines||[]).filter(x=>x.t==='warn').length;
+    $('logMeta').textContent=(d.lines||[]).length+' 行 · 错误 '+errs+' · 警告 '+warns;
+    if(near) body.scrollTop=body.scrollHeight;
+  }catch(e){console.error(e);}
+}
+document.querySelectorAll('.logtab').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('.logtab').forEach(x=>x.classList.remove('active'));
+  t.classList.add('active'); curSrc=t.dataset.src; loadLogs();
+});
+
+// —— 定时任务 ——
+async function loadTimers(){
+  try{
+    const r=await fetch('/api/media/stats'); const d=await r.json();
+    const timers = d.timers || [];
+    if(!timers.length){
+      $('timers').innerHTML = '<div class="row"><span class="k">无定时任务</span></div>';
+      return;
+    }
+    $('timers').innerHTML = timers.map(t => `
+      <div class="row">
+        <span class="k" style="flex:1;">${t.unit}</span>
+        <span class="v" style="color:var(--text-dim);font-size:11px;">${t.next}</span>
+      </div>
+    `).join('');
+  }catch(e){console.error(e);}
+}
+
+// 所有轮询
+function pageLoaded(){
+  tickClock();
+  loadStats(); setInterval(loadStats, 60000);
+  loadLogs(); setInterval(loadLogs, 15000);
+  loadPosters(); setInterval(loadPosters, 300000);
+  loadAccess(); setInterval(loadAccess, 60000);
+  loadTimers();
+}
+
+if(document.readyState==='complete') pageLoaded();
+else window.addEventListener('load', pageLoaded);
+// 工具函数 $ 按id获取元素
+function $(id){return document.getElementById(id);}
+</script>
+</body>
+</html>
